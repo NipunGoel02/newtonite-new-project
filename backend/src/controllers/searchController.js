@@ -5,6 +5,10 @@ const { rankDocuments } = require("../search/ranking");
 const { findClosestTerms } = require("../search/levenshtein");
 const { createSnippet } = require("../search/highlighter");
 const { trie } = require("../search/trie");
+const {
+  getCachedSearch,
+  setCachedSearch,
+} = require("../redis/cache");
 
 const search = async (req, res, next) => {
   try {
@@ -36,6 +40,25 @@ const search = async (req, res, next) => {
       });
     }
 
+    const cacheParams = {
+      q: normalizedQuery,
+      tag,
+      author,
+      from,
+      to,
+      page,
+      limit,
+    };
+
+    const cachedResult = await getCachedSearch(cacheParams);
+
+    if (cachedResult) {
+      return res.json({
+        ...cachedResult,
+        cached: true,
+      });
+    }
+
     let searchTerms = tokenize(normalizedQuery);
 
     const allTerms = new Set(invertedIndex.index.keys());
@@ -46,26 +69,25 @@ const search = async (req, res, next) => {
     for (const term of searchTerms) {
       if (invertedIndex.hasTerm(term)) {
         correctedTerms.push(term);
-        continue;
-      }
-
-      const closest = findClosestTerms(
-        term,
-        Array.from(allTerms),
-        2
-      );
-
-      if (closest.length > 0) {
-        correctedTerms.push(closest[0].term);
-        hasCorrection = true;
       } else {
-        correctedTerms.push(term);
+        const closest = findClosestTerms(
+          term,
+          Array.from(allTerms),
+          2
+        );
+
+        if (closest.length > 0) {
+          correctedTerms.push(closest[0].term);
+          hasCorrection = true;
+        } else {
+          correctedTerms.push(term);
+        }
       }
     }
 
     searchTerms = correctedTerms;
 
-    const ranked = rankDocuments(searchTerms.join(" "));
+    let ranked = rankDocuments(searchTerms.join(" "));
 
     let results = ranked;
 
@@ -80,11 +102,11 @@ const search = async (req, res, next) => {
       );
 
       const allowedIds = new Set(
-        tagResult.rows.map((row) => row.id)
+        tagResult.rows.map((row) => Number(row.id))
       );
 
-      results = results.filter((doc) =>
-        allowedIds.has(doc.id)
+      results = results.filter((document) =>
+        allowedIds.has(Number(document.id))
       );
     }
 
@@ -97,11 +119,11 @@ const search = async (req, res, next) => {
       );
 
       const allowedIds = new Set(
-        authorResult.rows.map((row) => row.id)
+        authorResult.rows.map((row) => Number(row.id))
       );
 
-      results = results.filter((doc) =>
-        allowedIds.has(doc.id)
+      results = results.filter((document) =>
+        allowedIds.has(Number(document.id))
       );
     }
 
@@ -109,34 +131,30 @@ const search = async (req, res, next) => {
       const dateResult = await query(
         `SELECT id
          FROM documents
-         WHERE ($1::timestamp IS NULL OR created_at >= $1::timestamp)
-         AND ($2::timestamp IS NULL OR created_at <= $2::timestamp)`,
+         WHERE ($1::date IS NULL OR created_at >= $1::date)
+           AND ($2::date IS NULL OR created_at < ($2::date + INTERVAL '1 day'))`,
         [from || null, to || null]
       );
 
       const allowedIds = new Set(
-        dateResult.rows.map((row) => row.id)
+        dateResult.rows.map((row) => Number(row.id))
       );
 
-      results = results.filter((doc) =>
-        allowedIds.has(doc.id)
+      results = results.filter((document) =>
+        allowedIds.has(Number(document.id))
       );
     }
 
     const total = results.length;
 
-    const pageNumber = Math.max(
-      Number(page) || 1,
-      1
-    );
+    const pageNumber = Math.max(Number(page) || 1, 1);
 
     const pageLimit = Math.min(
       Math.max(Number(limit) || 10, 1),
       50
     );
 
-    const offset =
-      (pageNumber - 1) * pageLimit;
+    const offset = (pageNumber - 1) * pageLimit;
 
     const paginatedResults = results
       .slice(offset, offset + pageLimit)
@@ -152,9 +170,7 @@ const search = async (req, res, next) => {
           searchTerms,
           240
         ),
-        score: Number(
-          document.score.toFixed(4)
-        ),
+        score: Number(document.score.toFixed(4)),
       }));
 
     const latencyMs = Date.now() - start;
@@ -171,7 +187,7 @@ const search = async (req, res, next) => {
       ]
     );
 
-    res.json({
+    const responseData = {
       success: true,
       query: normalizedQuery,
       correctedQuery: hasCorrection
@@ -182,12 +198,14 @@ const search = async (req, res, next) => {
         page: pageNumber,
         limit: pageLimit,
         total,
-        totalPages: Math.ceil(
-          total / pageLimit
-        ),
+        totalPages: Math.ceil(total / pageLimit),
       },
       latencyMs,
-    });
+    };
+
+    await setCachedSearch(cacheParams, responseData);
+
+    res.json(responseData);
   } catch (error) {
     next(error);
   }
@@ -195,11 +213,7 @@ const search = async (req, res, next) => {
 
 const suggest = async (req, res, next) => {
   try {
-    const prefix = String(
-      req.query.prefix || ""
-    )
-      .trim()
-      .toLowerCase();
+    const prefix = String(req.query.prefix || "").trim();
 
     if (!prefix) {
       return res.json({
@@ -208,14 +222,10 @@ const suggest = async (req, res, next) => {
       });
     }
 
-    const suggestions = trie.suggest(
-      prefix,
-      5
-    );
+    const suggestions = trie.suggest(prefix, 5);
 
     res.json({
       success: true,
-      prefix,
       suggestions,
     });
   } catch (error) {

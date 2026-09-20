@@ -1,24 +1,40 @@
-const { rateLimit } = require("express-rate-limit");
+const { redis, connectRedis } = require("../redis/client");
 
-const searchRateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: "Too many searches. Please try again later.",
-  },
-  handler: (req, res, next, options) => {
-    const retryAfter = Math.ceil(options.windowMs / 1000);
+const WINDOW_SECONDS = 60;
+const MAX_REQUESTS = 30;
 
-    res.set("Retry-After", retryAfter);
+const rateLimit = async (req, res, next) => {
+  try {
+    await connectRedis();
 
-    res.status(429).json({
-      success: false,
-      message: "Too many searches. Please try again later.",
-    });
-  },
-});
+    const identifier = req.user?.id
+      ? `user:${req.user.id}`
+      : `ip:${req.ip}`;
 
-module.exports = searchRateLimiter;
+    const key = `rate_limit:${identifier}`;
+
+    const count = await redis.incr(key);
+
+    if (count === 1) {
+      await redis.expire(key, WINDOW_SECONDS);
+    }
+
+    if (count > MAX_REQUESTS) {
+      const ttl = await redis.ttl(key);
+
+      res.set("Retry-After", String(Math.max(ttl, 1)));
+
+      return res.status(429).json({
+        success: false,
+        message: "Too many requests",
+        retryAfter: Math.max(ttl, 1),
+      });
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = rateLimit;
