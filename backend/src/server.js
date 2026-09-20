@@ -1,17 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const config = require("./config");
-const searchRoutes = require("./routes/search");
-
-
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-const express = require("express");
-const cors = require("cors");
-const config = require("./config");
-
 const authRoutes = require("./routes/auth");
 const searchRoutes = require("./routes/search");
 const documentRoutes = require("./routes/documents");
