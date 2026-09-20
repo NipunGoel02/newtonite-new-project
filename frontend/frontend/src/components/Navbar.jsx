@@ -18,9 +18,14 @@ export default function Navbar() {
 
       <div className="navbar-links">
         <Link to="/dashboard">Dashboard</Link>
+
         <Link to="/search">Search</Link>
 
-        {isAdmin && <Link to="/admin">Admin</Link>}
+        {isAdmin && (
+          <Link to="/admin/documents">
+            Admin
+          </Link>
+        )}
 
         <span className="navbar-user">
           {user?.name || user?.email}

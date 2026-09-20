@@ -232,10 +232,35 @@ const logout = async (req, res, next) => {
     next(error);
   }
 };
+const getMe = async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT id, name, email, role, created_at
+       FROM users
+       WHERE id = $1`,
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      user: result.rows[0],
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 module.exports = {
   register,
   login,
   refresh,
   logout,
+  getMe,
 };
