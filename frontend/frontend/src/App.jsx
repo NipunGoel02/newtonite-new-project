@@ -1,6 +1,9 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import Navbar from "./components/Navbar";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
 
 function Home() {
   return (
@@ -13,9 +16,14 @@ function Home() {
 
 function Dashboard() {
   return (
-    <div style={{ padding: "40px" }}>
-      <h1>Dashboard</h1>
-    </div>
+    <>
+      <Navbar />
+
+      <main style={{ padding: "40px" }}>
+        <h1>Dashboard</h1>
+        <p>Welcome to SearchHub.</p>
+      </main>
+    </>
   );
 }
 
@@ -24,6 +32,8 @@ function App() {
     <AuthProvider>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
 
         <Route element={<ProtectedRoute />}>
           <Route path="/dashboard" element={<Dashboard />} />
