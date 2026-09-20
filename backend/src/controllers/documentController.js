@@ -143,6 +143,40 @@ const getDocument = async (req, res, next) => {
     next(error);
   }
 };
+const getRelatedDocuments = async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT
+        d.id,
+        d.title,
+        d.body,
+        d.status,
+        d.created_at,
+        u.name AS author_name,
+        COUNT(DISTINCT dt2.tag_id) AS shared_tags
+       FROM documents d
+       JOIN users u ON u.id = d.author_id
+       JOIN document_tags dt2 ON dt2.document_id = d.id
+       WHERE d.id != $1
+         AND dt2.tag_id IN (
+           SELECT tag_id
+           FROM document_tags
+           WHERE document_id = $1
+         )
+       GROUP BY d.id, u.name
+       ORDER BY shared_tags DESC, d.created_at DESC
+       LIMIT 5`,
+      [req.params.id]
+    );
+
+    res.json({
+      success: true,
+      documents: result.rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 const updateDocument = async (req, res, next) => {
   const client = await pool.connect();
@@ -249,6 +283,7 @@ module.exports = {
   createDocument,
   getDocuments,
   getDocument,
+  getRelatedDocuments,
   updateDocument,
   deleteDocument,
 };

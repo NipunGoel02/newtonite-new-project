@@ -7,14 +7,15 @@ const {
   createDocument,
   getDocuments,
   getDocument,
+  getRelatedDocuments,
   updateDocument,
-  deleteDocument,
+  deleteDocument
 } = require("../controllers/documentController");
 
 const router = express.Router();
 
 router.get("/", authenticate, getDocuments);
-
+router.get("/:id/related", authenticate, getRelatedDocuments);
 router.get("/:id", authenticate, getDocument);
 
 router.post("/", authenticate, adminOnly, async (req, res, next) => {
