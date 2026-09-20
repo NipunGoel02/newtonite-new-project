@@ -1,4 +1,5 @@
 const { query, pool } = require("../db");
+const { invalidateSearchCache } = require("../redis/cache");
 
 const createDocument = async (req, res, next) => {
   const client = await pool.connect();
@@ -45,6 +46,8 @@ const createDocument = async (req, res, next) => {
     }
 
     await client.query("COMMIT");
+
+    await invalidateSearchCache();
 
     res.status(201).json({
       success: true,
@@ -143,6 +146,7 @@ const getDocument = async (req, res, next) => {
     next(error);
   }
 };
+
 const getRelatedDocuments = async (req, res, next) => {
   try {
     const result = await query(
@@ -241,6 +245,8 @@ const updateDocument = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    await invalidateSearchCache();
+
     res.json({
       success: true,
       message: "Document updated",
@@ -269,6 +275,8 @@ const deleteDocument = async (req, res, next) => {
         message: "Document not found",
       });
     }
+
+    await invalidateSearchCache();
 
     res.json({
       success: true,

@@ -9,6 +9,7 @@ const {
   getCachedSearch,
   setCachedSearch,
 } = require("../redis/cache");
+const { incrementSearch } = require("../redis/trending");
 
 const search = async (req, res, next) => {
   try {
@@ -39,6 +40,8 @@ const search = async (req, res, next) => {
         message: "Search query cannot be empty",
       });
     }
+
+    await incrementSearch(normalizedQuery);
 
     const cacheParams = {
       q: normalizedQuery,
@@ -87,7 +90,7 @@ const search = async (req, res, next) => {
 
     searchTerms = correctedTerms;
 
-    let ranked = rankDocuments(searchTerms.join(" "));
+    const ranked = rankDocuments(searchTerms.join(" "));
 
     let results = ranked;
 
