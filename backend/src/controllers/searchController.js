@@ -1,84 +1,73 @@
 const { query } = require("../db");
 const { tokenize, normalizeQuery } = require("../search/tokenizer");
+const { invertedIndex } = require("../search/invertedIndex");
 const { rankDocuments } = require("../search/ranking");
-const { trie } = require("../search/trie");
 const { findClosestTerms } = require("../search/levenshtein");
 const { createSnippet } = require("../search/highlighter");
+const { trie } = require("../search/trie");
 
 const search = async (req, res, next) => {
-  const startTime = Date.now();
-
   try {
+    const start = Date.now();
+
     const {
-      q = "",
+      q,
       tag,
       author,
       from,
       to,
       page = 1,
       limit = 10,
-      sort = "relevance",
     } = req.query;
 
-    if (!q.trim()) {
+    if (!q || !String(q).trim()) {
       return res.status(400).json({
         success: false,
-        message: "Search query is required",
+        message: "Search query cannot be empty",
       });
     }
 
-    const normalizedQuery = normalizeQuery(q);
-    let queryTerms = tokenize(normalizedQuery);
+    const normalizedQuery = normalizeQuery(String(q));
 
-    if (!queryTerms.length) {
-      return res.json({
-        success: true,
-        query: q,
-        correctedQuery: null,
-        results: [],
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: 0,
-          totalPages: 0,
-        },
+    if (!normalizedQuery) {
+      return res.status(400).json({
+        success: false,
+        message: "Search query cannot be empty",
       });
     }
 
-    const indexedTerms = new Set();
+    let searchTerms = tokenize(normalizedQuery);
 
-    const rankedResults = rankDocuments(normalizedQuery);
+    const allTerms = new Set(invertedIndex.index.keys());
 
-    for (const result of rankedResults) {
-      const documentTerms = tokenize(`${result.title} ${result.body}`);
+    const correctedTerms = [];
+    let hasCorrection = false;
 
-      for (const term of documentTerms) {
-        indexedTerms.add(term);
-      }
-    }
-
-    let correctedQuery = null;
-
-    const correctedTerms = queryTerms.map((term) => {
-      if (indexedTerms.has(term)) {
-        return term;
+    for (const term of searchTerms) {
+      if (invertedIndex.hasTerm(term)) {
+        correctedTerms.push(term);
+        continue;
       }
 
-      const matches = findClosestTerms(
+      const closest = findClosestTerms(
         term,
-        Array.from(indexedTerms),
+        Array.from(allTerms),
         2
       );
 
-      return matches.length ? matches[0].term : term;
-    });
-
-    if (correctedTerms.join(" ") !== queryTerms.join(" ")) {
-      correctedQuery = correctedTerms.join(" ");
-      queryTerms = correctedTerms;
+      if (closest.length > 0) {
+        correctedTerms.push(closest[0].term);
+        hasCorrection = true;
+      } else {
+        correctedTerms.push(term);
+      }
     }
 
-    let results = rankDocuments(queryTerms.join(" "));
+    searchTerms = correctedTerms;
+
+    const ranked = rankDocuments(searchTerms.join(" "));
+
+    let results = ranked;
 
     if (tag) {
       const tagResult = await query(
@@ -91,11 +80,11 @@ const search = async (req, res, next) => {
       );
 
       const allowedIds = new Set(
-        tagResult.rows.map((row) => String(row.id))
+        tagResult.rows.map((row) => row.id)
       );
 
-      results = results.filter((item) =>
-        allowedIds.has(String(item.id))
+      results = results.filter((doc) =>
+        allowedIds.has(doc.id)
       );
     }
 
@@ -108,89 +97,67 @@ const search = async (req, res, next) => {
       );
 
       const allowedIds = new Set(
-        authorResult.rows.map((row) => String(row.id))
+        authorResult.rows.map((row) => row.id)
       );
 
-      results = results.filter((item) =>
-        allowedIds.has(String(item.id))
+      results = results.filter((doc) =>
+        allowedIds.has(doc.id)
       );
     }
 
-    if (from) {
+    if (from || to) {
       const dateResult = await query(
         `SELECT id
          FROM documents
-         WHERE created_at >= $1`,
-        [from]
+         WHERE ($1::timestamp IS NULL OR created_at >= $1::timestamp)
+         AND ($2::timestamp IS NULL OR created_at <= $2::timestamp)`,
+        [from || null, to || null]
       );
 
       const allowedIds = new Set(
-        dateResult.rows.map((row) => String(row.id))
+        dateResult.rows.map((row) => row.id)
       );
 
-      results = results.filter((item) =>
-        allowedIds.has(String(item.id))
-      );
-    }
-
-    if (to) {
-      const dateResult = await query(
-        `SELECT id
-         FROM documents
-         WHERE created_at <= $1`,
-        [to]
-      );
-
-      const allowedIds = new Set(
-        dateResult.rows.map((row) => String(row.id))
-      );
-
-      results = results.filter((item) =>
-        allowedIds.has(String(item.id))
-      );
-    }
-
-    if (sort === "date") {
-      const dateResult = await query(
-        `SELECT id, created_at
-         FROM documents
-         WHERE id = ANY($1::int[])`,
-        [results.map((item) => item.id)]
-      );
-
-      const dates = new Map(
-        dateResult.rows.map((row) => [
-          String(row.id),
-          new Date(row.created_at).getTime(),
-        ])
-      );
-
-      results.sort(
-        (a, b) =>
-          (dates.get(String(b.id)) || 0) -
-          (dates.get(String(a.id)) || 0)
+      results = results.filter((doc) =>
+        allowedIds.has(doc.id)
       );
     }
 
     const total = results.length;
-    const pageNumber = Math.max(Number(page) || 1, 1);
-    const pageSize = Math.min(
+
+    const pageNumber = Math.max(
+      Number(page) || 1,
+      1
+    );
+
+    const pageLimit = Math.min(
       Math.max(Number(limit) || 10, 1),
       50
     );
 
-    const offset = (pageNumber - 1) * pageSize;
+    const offset =
+      (pageNumber - 1) * pageLimit;
 
     const paginatedResults = results
-      .slice(offset, offset + pageSize)
-      .map((item) => ({
-        id: item.id,
-        title: item.title,
-        snippet: createSnippet(item.body, queryTerms),
-        score: Number(item.score.toFixed(4)),
+      .slice(offset, offset + pageLimit)
+      .map((document) => ({
+        id: document.id,
+        title: createSnippet(
+          document.title,
+          searchTerms,
+          160
+        ),
+        snippet: createSnippet(
+          document.body,
+          searchTerms,
+          240
+        ),
+        score: Number(
+          document.score.toFixed(4)
+        ),
       }));
 
-    const latency = Date.now() - startTime;
+    const latencyMs = Date.now() - start;
 
     await query(
       `INSERT INTO search_events
@@ -198,24 +165,28 @@ const search = async (req, res, next) => {
        VALUES ($1, $2, $3, $4)`,
       [
         req.user.id,
-        q,
+        normalizedQuery,
         total,
-        latency,
+        latencyMs,
       ]
     );
 
     res.json({
       success: true,
-      query: q,
-      correctedQuery,
+      query: normalizedQuery,
+      correctedQuery: hasCorrection
+        ? searchTerms.join(" ")
+        : null,
       results: paginatedResults,
       pagination: {
         page: pageNumber,
-        limit: pageSize,
+        limit: pageLimit,
         total,
-        totalPages: Math.ceil(total / pageSize),
+        totalPages: Math.ceil(
+          total / pageLimit
+        ),
       },
-      latencyMs: latency,
+      latencyMs,
     });
   } catch (error) {
     next(error);
@@ -224,19 +195,27 @@ const search = async (req, res, next) => {
 
 const suggest = async (req, res, next) => {
   try {
-    const { prefix = "" } = req.query;
+    const prefix = String(
+      req.query.prefix || ""
+    )
+      .trim()
+      .toLowerCase();
 
-    if (!prefix.trim()) {
+    if (!prefix) {
       return res.json({
         success: true,
         suggestions: [],
       });
     }
 
-    const suggestions = trie.suggest(prefix, 5);
+    const suggestions = trie.suggest(
+      prefix,
+      5
+    );
 
     res.json({
       success: true,
+      prefix,
       suggestions,
     });
   } catch (error) {
